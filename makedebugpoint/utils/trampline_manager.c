@@ -8,12 +8,15 @@
 
 #include "trampline_manager.h"
 
-
+#include <mach/vm_map.h>
+#include <mach/mach_types.h>
+#include <kern/task.h>
 #include <sys/param.h>
 #include <sys/malloc.h>
 #include <sys/dirent.h>
 #include <mach-o/loader.h>
 #include <string.h>
+#include <libkern/libkern.h>
 
 #include "cpu_protection.h"
 #include "configuration.h"
@@ -21,6 +24,13 @@
 kern_return_t
 install_trampoline_any(mach_vm_address_t patch_addr, mach_vm_address_t dest_address, void *orig_bytes)
 {
+    
+    char checkbits[TRAMPOLINE_SIZE+0x100] = {0};
+    uint8_t buffer[TRAMPOLINE_SIZE];
+    task_t task = current_task();
+    mach_vm_size_t bytes_read;
+    int i = 0;
+    
     char trampoline[12] = "\x48\xB8\x00\x00\x00\x00\x00\x00\x00\x00" // mov rax, address
     "\xFF\xE0"; // jmp rax
     
@@ -32,12 +42,14 @@ install_trampoline_any(mach_vm_address_t patch_addr, mach_vm_address_t dest_addr
     memcpy(orig_bytes, (void*)patch_addr, sizeof(trampoline));
     // set the target address
     memcpy(trampoline+2, &dest_address, sizeof(mach_vm_address_t));
+    
     // patch the target address with the trampoline
     disable_interrupts();
     disable_wp();
     memcpy((void*)patch_addr, trampoline, sizeof(trampoline));
     enable_wp();
     enable_interrupts();
+    
     return KERN_SUCCESS;
 }
 

@@ -2,8 +2,8 @@
 //  inline_hook.h
 //  makedebugpoint
 //
-//  Created by zuff on 2019/3/1.
-//  Copyright © 2019 zuff. All rights reserved.
+//  Created by lilang_wu on 2019/3/1.
+//  Copyright © 2019 lilang_wu. All rights reserved.
 //
 
 #ifndef inline_hook_h
@@ -21,8 +21,8 @@
 typedef enum
 {
     INLINE_ENUM_IS_IO_CONNECT_METHOD = 0,
-   
-    INLINE_ENUM_MAX =1
+    INLINE_ENUM_EXEC_MACH_IMGACT = 1,
+    INLINE_ENUM_MAX =2,
 } enum_inline_point_t;
 
 
@@ -41,7 +41,7 @@ typedef struct
 
 kern_return_t init_inline_hook(void);
 kern_return_t install_inline_hook(void);
-kern_return_t un_install_inline_hook(void);
-kern_return_t un_init_inline_hook(void);
+kern_return_t uninstall_inline_hook(void);
+kern_return_t uninit_inline_hook(void);
 
 #endif /* inline_hook_h */

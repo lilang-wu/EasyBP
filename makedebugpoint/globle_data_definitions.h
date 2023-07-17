@@ -17,8 +17,10 @@ struct kernel_info
 {
     mach_vm_address_t running_kernel_base_addr; // the address of kernel base
     mach_vm_address_t running_text_addr; // the address of running __TEXT segment
-    mach_vm_address_t disk_text_addr;    // the same address at /mach_kernel in filesystem
+    mach_vm_address_t disk_text_vm;    // the same address at /mach_kernel in filesystem
+    mach_vm_address_t disk_text_vm_end;    // the same address at /mach_kernel in filesystem
     mach_vm_address_t kaslr_slide;       // the kernel aslr slide, computed as the difference between above's addresses
+    mach_vm_address_t kdconst_slide;
     void *linkedit_buf;                  // pointer to __LINKEDIT buffer containing symbols to solve
     uint64_t linkedit_fileoff;           // __LINKEDIT file offset so we can read
     uint64_t linkedit_size;
@@ -32,6 +34,7 @@ struct kernel_info
     mach_vm_address_t  disk_data_addr;
     uint64_t data_size;
     mach_vm_address_t  disk_data_vm;
+    mach_vm_address_t  disk_data_vm_end;
     uint64_t data_vmsize;
     
     struct mach_header_64 *mh;           // ptr to mach-o header of running kernel

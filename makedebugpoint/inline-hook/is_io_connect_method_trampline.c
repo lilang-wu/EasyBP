@@ -2,7 +2,7 @@
 //  is_io_connect_method_trampline.c
 //  makedebugpoint
 //
-//  Created by zuff on 2019/3/1.
+//  Created by lilang_wu on 2019/3/1.
 //  Copyright © 2019 zuff. All rights reserved.
 //
 
@@ -44,7 +44,7 @@ kern_return_t trampline_is_io_connect_method (IS_IO_CONNECT_METHOD_ARGS)
     //__asm__ volatile ("int3");
 
     s_is_io_connect_method_JmpBackAddr = g_inline_hook_entry[INLINE_ENUM_IS_IO_CONNECT_METHOD].ori_func_addr + TRAMPOLINE_SIZE;
-    
+    printf("---abc--- trampline_is_io_connect_method called");
     
     //Begin lock
     kern_return_t  kr =0;

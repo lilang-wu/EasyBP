@@ -17,14 +17,18 @@
 #include <mach-o/nlist.h>
 #include <mach-o/loader.h>
 #include <vm/vm_kern.h>
+#include <kern/task.h>
 
 #include "configuration.h"
+
+extern struct kernel_info g_kernel_info;
 
 static kern_return_t get_kernel_mach_header(void *buffer, vnode_t kernel_vnode, vfs_context_t vfs);
 static kern_return_t process_kernel_mach_header(void *kernel_header, struct kernel_info *kinfo);
 static kern_return_t get_kernel_linkedit(vnode_t kernel_vnode, vfs_context_t vfs, struct kernel_info *kinfo);
 static void get_running_kernel_address(struct kernel_info *kinfo);
-static mach_vm_address_t find_kernel_kaslr(void);
+static mach_vm_address_t find_kernel_text_kaslr(void);
+static mach_vm_address_t find_kernel_data_const_kaslr(void);
 
 mach_header_t *g_kernel_header = NULL;
 
@@ -37,7 +41,6 @@ mach_header_t *g_kernel_header = NULL;
 kern_return_t
 init_kernel_info(struct kernel_info *kinfo)
 {
-    //moony_modify//printf("[DEBUG] init_kernel_info entered:\n");
     kern_return_t error = 0;
     // lookup vnode for /mach_kernel
     vnode_t kernel_vnode = NULLVP;
@@ -52,16 +55,13 @@ init_kernel_info(struct kernel_info *kinfo)
         return KERN_FAILURE;
     }
     
-    void *kernel_header = _MALLOC(PAGE_SIZE_64, M_TEMP, M_ZERO);
+    void *kernel_header = _MALLOC(2*PAGE_SIZE_64, M_TEMP, M_ZERO);
     if (kernel_header == NULL) return KERN_FAILURE;
     
     error = get_kernel_mach_header(kernel_header, kernel_vnode, vfs);
     if (error) goto failure;
     error = process_kernel_mach_header(kernel_header, kinfo);
     if (error) goto failure;
-    
-    kinfo->kaslr_slide = find_kernel_kaslr();
-    get_running_kernel_address(kinfo);
 
     kinfo->linkedit_buf = _MALLOC(kinfo->linkedit_size, M_TEMP, M_ZERO);
     if (kinfo->linkedit_buf == NULL)
@@ -72,6 +72,9 @@ init_kernel_info(struct kernel_info *kinfo)
     
     error = get_kernel_linkedit(kernel_vnode,vfs, kinfo);
     if (error) goto failure;
+    
+    kinfo->kaslr_slide = find_kernel_text_kaslr();
+    kinfo->kdconst_slide = find_kernel_data_const_kaslr();
     
 success:
     if (vfs)
@@ -114,8 +117,42 @@ solve_kernel_symbol(struct kernel_info *kinfo, char *symbol_to_solve)
         if (strncmp(symbol_to_solve, symbol_string, strlen(symbol_to_solve)) == 0
             && strncmp(symbol_string, symbol_to_solve, strlen(symbol_string)) == 0)
         {
+            if (nlist->n_value >= kinfo->disk_text_vm && nlist->n_value <= kinfo->disk_text_vm_end) {
+                uValue  = nlist->n_value + kinfo->kaslr_slide;
+                return ((unsigned long long)uValue);
+            }
             
-            uValue  = nlist->n_value + kinfo->kaslr_slide;
+            if (nlist->n_value >= kinfo->disk_data_vm && nlist->n_value <= kinfo->disk_data_vm_end) {
+                uValue  = nlist->n_value + kinfo->kdconst_slide;
+                return ((unsigned long long)uValue);
+            }
+            return 0;
+        }
+    }
+    return 0;
+    
+}
+
+mach_vm_address_t
+solve_kernel_symbol_internal(struct kernel_info *kinfo, char *symbol_to_solve)
+{
+    struct nlist_64 *nlist = NULL;
+    mach_vm_address_t  uValue = 0;
+    
+    if (kinfo == NULL || kinfo->linkedit_buf == NULL) return 0;
+    
+    mach_vm_address_t symbol_off = kinfo->symboltable_fileoff - kinfo->linkedit_fileoff;
+    mach_vm_address_t string_off = kinfo->stringtable_fileoff - kinfo->linkedit_fileoff;
+    
+    for (uint32_t i = 0; i < kinfo->symboltable_nr_symbols; i++)
+    {
+        nlist = (struct nlist_64*)((char*)kinfo->linkedit_buf + symbol_off + i * sizeof(struct nlist_64));
+        char *symbol_string = ((char*)kinfo->linkedit_buf + string_off + nlist->n_un.n_strx);
+        //kernel_print_log(symbol_string);
+        if (strncmp(symbol_to_solve, symbol_string, strlen(symbol_to_solve)) == 0
+            && strncmp(symbol_string, symbol_to_solve, strlen(symbol_string)) == 0)
+        {
+            uValue  = nlist->n_value;
             return ((unsigned long long)uValue);
         }
     }
@@ -147,9 +184,6 @@ solve_next_kernel_symbol(const struct kernel_info *kinfo, const char *symbol)
             // lookup the next symbol
             nlist = (struct nlist_64*)((char*)kinfo->linkedit_buf + symbol_off + (i+1) * sizeof(struct nlist_64));
             symbol_string = ((char*)kinfo->linkedit_buf + string_off + nlist->n_un.n_strx);
-#if DEBUG
-            //moony_modify//printf("[DEBUG] found next symbol %s at %llx (%s)\n", symbol, nlist->n_value, symbol_string);
-#endif
             return (nlist->n_value + kinfo->kaslr_slide);
         }
     }
@@ -173,7 +207,7 @@ get_kernel_mach_header(void *buffer, vnode_t kernel_vnode, vfs_context_t vfs)
     uio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
     if (uio == NULL) return KERN_FAILURE;
     // imitate the kernel and read a single page from the header
-    error = uio_addiov(uio, CAST_USER_ADDR_T(buffer), PAGE_SIZE_64);
+    error = uio_addiov(uio, CAST_USER_ADDR_T(buffer), 2*PAGE_SIZE_64);
     if (error) return error;
     // read kernel vnode into the buffer
     error = VNOP_READ(kernel_vnode, uio, 0, vfs);
@@ -230,7 +264,8 @@ process_kernel_mach_header(void *kernel_header, struct kernel_info *kinfo)
             // use this one to retrieve the original vm address of __TEXT so we can compute kernel aslr slide
             if (strncmp(seg_cmd->segname, "__TEXT", 16) == 0)
             {
-                kinfo->disk_text_addr = seg_cmd->vmaddr;
+                kinfo->disk_text_vm = seg_cmd->vmaddr;
+                kinfo->disk_text_vm_end = seg_cmd->vmaddr + seg_cmd->vmsize;
                 // lookup the __text section - we want the size which can be retrieve here or from the running version
                 char *section_addr = load_cmd_addr + sizeof(struct segment_command_64);
                 struct section_64 *section_cmd = NULL;
@@ -252,13 +287,14 @@ process_kernel_mach_header(void *kernel_header, struct kernel_info *kinfo)
                 kinfo->linkedit_size    = seg_cmd->filesize;
             }
             
-            else if (strncmp(seg_cmd->segname, "__DATA", 16) == 0)
+            else if (strncmp(seg_cmd->segname, "__DATA_CONST", 16) == 0)
             {
                 
                 kinfo->disk_data_addr = seg_cmd->fileoff;
                 kinfo->data_size   = seg_cmd->filesize;
                 kinfo->disk_data_vm = seg_cmd->vmaddr;
                 kinfo->data_vmsize = seg_cmd->vmsize;
+                kinfo->disk_data_vm_end = seg_cmd->vmaddr + seg_cmd->vmsize;
             }
         }
         // table information available at LC_SYMTAB command
@@ -275,22 +311,25 @@ process_kernel_mach_header(void *kernel_header, struct kernel_info *kinfo)
     return KERN_SUCCESS;
 }
 
-static void
-get_running_kernel_address(struct kernel_info *kinfo)
-{
-    kinfo->running_text_addr = kinfo->disk_text_addr + kinfo->kaslr_slide;
-    kinfo->running_kernel_base_addr = 0;
+
+static mach_vm_address_t
+find_kernel_text_kaslr(void) {
+    vm_offset_t g_kernel_slide = 0;
+    vm_offset_t g_kc_slide = 0;
+    vm_offset_t func_address = (vm_offset_t) vm_kernel_unslide_or_perm_external;
+    g_kernel_slide = func_address - solve_kernel_symbol_internal(&g_kernel_info, "_vm_kernel_unslide_or_perm_external");
+    printf("g_kernel_slide = %llu", g_kernel_slide);
+    return g_kernel_slide;
 }
 
 static mach_vm_address_t
-find_kernel_kaslr() {
-    vm_offset_t g_kernel_slide = 0;
-    vm_offset_t func_address = (vm_offset_t) vm_kernel_unslide_or_perm_external;
-    vm_offset_t func_address_unslid = 0;
-    vm_kernel_unslide_or_perm_external(func_address, &func_address_unslid);
-    g_kernel_slide = func_address - func_address_unslid;
-    return g_kernel_slide;
+find_kernel_data_const_kaslr(void) {
+    vm_offset_t g_kernel_data_const_slide = 0;
+    g_kernel_data_const_slide = (vm_offset_t)&kernel_task - solve_kernel_symbol_internal(&g_kernel_info, "_kernel_task");
+    printf("g_kernel_data_const_slide = %llu", g_kernel_data_const_slide);
+    return g_kernel_data_const_slide;
 }
+
 
 kern_return_t
 cleanup_kernel_info(struct kernel_info *kinfo)

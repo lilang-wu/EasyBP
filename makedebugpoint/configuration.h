@@ -12,8 +12,9 @@
 #define TRAMPOLINE_SIZE 12
 
 #define API_SYMBOL_IS_IO_CONNECT_METHOD     "_is_io_connect_method"
+#define API_SYMBOL_EXEC_MACH_IMGACT     "exec_mach_imgact"
 
-#define MACH_KERNEL         "/System/Library/Kernels/kernel.development"      // location of kernel in filesystem
+#define MACH_KERNEL         "/System/Library/Kernels/kernel"      // location of kernel in filesystem
 
 #define TRAMPOLINE_SIZE 12                      // the size of NOP trampoline to use
 
