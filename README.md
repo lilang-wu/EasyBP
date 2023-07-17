@@ -19,4 +19,6 @@ breakpoint set -n refine_selector
 ```
 
 if you debug the syscall, you can just extent it.
-[EasyBP](https://adc.github.trendmicro.com/lilang-wu/EasyBP)
+[EasyBP](https://adc.github.trendmicro.com/lilang-wu/EasyBP) 
+
+Add support exec_mach_imgact function hook.
